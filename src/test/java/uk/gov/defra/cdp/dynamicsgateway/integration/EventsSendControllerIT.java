@@ -36,6 +36,10 @@ import uk.gov.defra.cdp.dynamicsgateway.metrics.ExternalCallMetrics;
 
 class EventsSendControllerIT extends IntegrationBase {
 
+    /** Distinct from NotificationSqsListenerIT's aggregate so ASB session reads are not crossed. */
+    private static final String EVENTS_SEND_AGGREGATE_ID =
+        "Imports.Notification.GBN-AG.GBN-AG-26-EVENTS-SEND-IT";
+
     @Autowired
     private TestRestTemplate restTemplate;
 
@@ -59,7 +63,8 @@ class EventsSendControllerIT extends IntegrationBase {
     @Test
     void post_shouldReturnAccepted_andMessageLandsInQueue() {
         // Given
-        String postedJson = "{\"eventType\":\"NotificationSubmitted\",\"aggregateId\":\"Imports.Notification.GBN-AG.GBN-AG-26-001\"}";
+        String postedJson = "{\"eventType\":\"NotificationSubmitted\",\"aggregateId\":\""
+            + EVENTS_SEND_AGGREGATE_ID + "\"}";
 
         // When
         ResponseEntity<Void> response = restTemplate.postForEntity(
@@ -68,11 +73,11 @@ class EventsSendControllerIT extends IntegrationBase {
         // Then
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
 
-        ServiceBusReceivedMessage received = receiveMessage();
+        ServiceBusReceivedMessage received = receiveMessageForSession(EVENTS_SEND_AGGREGATE_ID);
         assertThat(received.getBody()).hasToString(postedJson);
         assertThat(received.getRawAmqpMessage().getProperties().getContentType()).isEqualTo("application/json");
         assertThat(received.getMessageId()).isNotBlank();
-        assertThat(received.getSessionId()).isEqualTo("Imports.Notification.GBN-AG.GBN-AG-26-001");
+        assertThat(received.getSessionId()).isEqualTo(EVENTS_SEND_AGGREGATE_ID);
         verify(externalCallMetrics).recordCall(
             eq(ExternalCall.SERVICE_BUS_SEND_MESSAGE), any(Duration.class), eq(false));
     }
@@ -108,7 +113,7 @@ class EventsSendControllerIT extends IntegrationBase {
 
         // When
         ResponseEntity<String> response = restTemplate.postForEntity(
-            "/events", jsonEntity("{\"aggregateId\":\"Imports.Notification.GBN-AG.GBN-AG-26-001\"}"), String.class);
+            "/events", jsonEntity("{\"aggregateId\":\"" + EVENTS_SEND_AGGREGATE_ID + "\"}"), String.class);
 
         // Then
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
@@ -117,18 +122,19 @@ class EventsSendControllerIT extends IntegrationBase {
             eq(ExternalCall.SERVICE_BUS_SEND_MESSAGE), any(Duration.class), eq(true));
     }
 
-    private ServiceBusReceivedMessage receiveMessage() {
+    private ServiceBusReceivedMessage receiveMessageForSession(String sessionId) {
         try (ServiceBusSessionReceiverClient sessionReceiver = new ServiceBusClientBuilder()
                 .connectionString(SERVICE_BUS_CONTAINER.getConnectionString())
                 .sessionReceiver()
                 .queueName(QUEUE_NAME)
                 .receiveMode(ServiceBusReceiveMode.RECEIVE_AND_DELETE)
                 .buildClient();
-             ServiceBusReceiverClient receiver = sessionReceiver.acceptNextSession()) {
+             ServiceBusReceiverClient receiver = sessionReceiver.acceptSession(sessionId)) {
             return receiver.receiveMessages(1, Duration.ofSeconds(10))
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("No message received from queue within timeout"));
+                .orElseThrow(() -> new AssertionError(
+                    "No message received for session " + sessionId + " within timeout"));
         }
     }
 
