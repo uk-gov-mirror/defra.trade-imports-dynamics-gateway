@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-import com.azure.core.amqp.AmqpRetryOptions;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
 import com.azure.messaging.servicebus.ServiceBusMessage;
 import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
@@ -15,7 +15,6 @@ import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.models.ServiceBusReceiveMode;
 import java.time.Duration;
-import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,7 +51,8 @@ class EventsSendControllerIT extends IntegrationBase {
     }
 
     @AfterEach
-    void resetSpy() {
+    void resetSpyAndDrainAsb() {
+        drainAsb();
         Mockito.reset(senderClient, externalCallMetrics);
     }
 
@@ -89,7 +89,7 @@ class EventsSendControllerIT extends IntegrationBase {
         if (expectedBodyContains != null) {
             assertThat(response.getBody()).contains(expectedBodyContains);
         }
-        assertThat(receiveNoMessage()).isEmpty();
+        verify(senderClient, never()).sendMessage(any(ServiceBusMessage.class));
     }
 
     static Stream<Arguments> badRequestCases() {
@@ -129,23 +129,6 @@ class EventsSendControllerIT extends IntegrationBase {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("No message received from queue within timeout"));
-        }
-    }
-
-    private Optional<ServiceBusReceivedMessage> receiveNoMessage() {
-        try (ServiceBusSessionReceiverClient sessionReceiver = new ServiceBusClientBuilder()
-                .connectionString(SERVICE_BUS_CONTAINER.getConnectionString())
-                .retryOptions(new AmqpRetryOptions().setTryTimeout(Duration.ofSeconds(3)).setMaxRetries(0))
-                .sessionReceiver()
-                .queueName(QUEUE_NAME)
-                .receiveMode(ServiceBusReceiveMode.RECEIVE_AND_DELETE)
-                .buildClient();
-             ServiceBusReceiverClient receiver = sessionReceiver.acceptNextSession()) {
-            return receiver.receiveMessages(1, Duration.ofSeconds(1))
-                .stream()
-                .findFirst();
-        } catch (Exception _) {
-            return Optional.empty();
         }
     }
 
